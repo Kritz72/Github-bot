@@ -1,0 +1,53 @@
+name: AI Pull Request Reviewer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Get PR Diff
+        id: diff
+        run: |
+          echo "Fetching PR diff..."
+          curl -s -H "Accept: application/vnd.github.v3.diff" \
+          "${{ github.event.pull_request.url }}" > pr.diff
+          echo "Diff captured."
+
+      - name: Run AI Review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Sending diff to ChatGPT..."
+          REVIEW=$(curl https://api.openai.com/v1/chat/completions \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"model\": \"gpt-4o-mini\",
+              \"messages\": [
+                {\"role\": \"system\", \"content\": \"You are a senior code reviewer. Review the PR diff and suggest improvements, highlight potential bugs, and comment on best practices.\"},
+                {\"role\": \"user\", \"content\": \"$(cat pr.diff | head -c 12000)\"}
+              ],
+              \"max_tokens\": 400
+            }" | jq -r '.choices[0].message.content')
+
+          echo "Review response received."
+
+          COMMENT_BODY="### 🤖 AI Code Review
+          $REVIEW"
+
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          REPO=${{ github.repository }}
+
+          echo "Posting review comment..."
+          curl -s -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"body\": \"$COMMENT_BODY\"}" \
+            "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments"
